@@ -2,7 +2,7 @@ import WidgetKit
 
 struct PortfolioEntry: TimelineEntry {
     let date: Date
-    /// `nil` only when nothing has ever loaded (no cache, fetch failed).
+    /// `nil` while loading (placeholder) or when nothing has ever loaded.
     let portfolio: PortfolioDisplayModel?
     let freshness: DataFreshness
     let errorMessage: String?
@@ -22,16 +22,8 @@ struct PortfolioEntry: TimelineEntry {
         )
     }
 
-    static func sample(
-        _ scenario: MockPortfolio.Scenario = .gainDay,
-        baseCurrency: CurrencyCode = .inr,
-        date: Date = .now
-    ) -> PortfolioEntry {
-        PortfolioEntry(
-            date: date,
-            portfolio: PortfolioDisplayModel(summary: MockPortfolio.summary(scenario, now: date), baseCurrency: baseCurrency),
-            freshness: .sample
-        )
+    static func loading(date: Date = .now) -> PortfolioEntry {
+        PortfolioEntry(date: date, portfolio: nil, freshness: .live)
     }
 
     static func unavailable(_ message: String, date: Date = .now) -> PortfolioEntry {

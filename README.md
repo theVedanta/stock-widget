@@ -10,14 +10,13 @@ A dark, minimal iOS home-screen widget (WidgetKit + SwiftUI, iOS 17+) that combi
 
 ```
 project.yml                     XcodeGen spec (app + widget extension, App Group, Keychain group)
-Backend/portfolio.sample.json   Backend response contract / sample payload
+backend/                        FastAPI aggregation server (Groww + IBKR → one JSON payload)
 Shared/                         Compiled into both targets
   Models/Currency.swift         CurrencyCode, FXRates (conversion)
   Models/Portfolio.swift        PortfolioSummary, BrokerHoldings, Position, HistoryPoint (wire models)
   Models/PortfolioDisplayModel  Everything pre-computed in the chosen base currency
   Services/PortfolioDataSource  Remote REST client, errors, data-source factory
   Services/PortfolioRepository  Cache (App Group), throttling, request de-duplication
-  Services/MockPortfolioData…   Sample data (gain / loss / stale-broker scenarios)
   Services/AppGroup.swift       App Group, endpoint setting, Keychain token store
   Support/MarketHours.swift     NSE / NYSE sessions + refresh policy
   Support/Formatters.swift      ₹ lakh/crore + $ K/M formatting, "Updated Xm ago"
@@ -31,7 +30,47 @@ Widget/                         Widget extension
 App/StockWidgetApp.swift        Host app: set endpoint + token, reload widgets
 ```
 
-## Getting started
+## Backend
+
+`backend/` is a small FastAPI service that logs into both brokers, prices every holding, and serves the payload the widget reads.
+
+| Broker | How it connects | What it reads |
+| --- | --- | --- |
+| Groww | [Trade API](https://groww.in/trade-api/docs) over REST (needs the Trade API subscription) | `/holdings/user`, `/live-data/quote` per holding (last price + day change), `/margins/detail/user` (cash) |
+| IBKR | IB Gateway socket API via [`ib_async`](https://github.com/ib-api-reloaded/ib_async), read-only | portfolio positions + IB's mark price, snapshot prior close, `TotalCashValue` |
+
+FX rates come from [Frankfurter](https://frankfurter.dev) (ECB reference rates, no key). Every refresh records each broker's total in SQLite, and the last value of each day feeds the 30-day sparkline. The history starts the day you first run the backend.
+
+**Behaviour**
+- A background task refreshes every 5 minutes, so widget requests return from cache straight away and history keeps filling even when no phone is asking.
+- If one broker fails, its last good holdings are served marked `stale`. If it has never succeeded, it's marked `error`, which shows the ⚠︎ on its pill. If every broker fails, the API returns `503`.
+- Groww tokens expire at 06:00 IST every day. With `GROWW_API_KEY` + `GROWW_TOTP_SECRET` the backend renews them itself. A `401` triggers one re-login.
+- For IBKR, `docker-compose.yml` runs [`gnzsnz/ib-gateway`](https://github.com/gnzsnz/ib-gateway-docker) with IBC, so the gateway logs in and restarts every night unattended. IBKR still asks for a 2FA approval on your phone about once a week.
+
+**Limitations**
+- Groww's Trade API only exposes demat stocks and ETFs. Mutual funds don't show up.
+- Without an IBKR market-data subscription, prior closes use delayed data. That's fine for day change.
+
+**Run it**
+
+```sh
+cd backend
+cp .env.example .env          # fill in API_TOKEN, Groww key + TOTP secret, IBKR login
+docker compose up -d          # API on 127.0.0.1:8000 + IB Gateway
+```
+
+Expose it over HTTPS (Caddy, Cloudflare Tunnel, Tailscale Funnel, …), then enter `https://<host>/v1/portfolio` and your `API_TOKEN` in the iOS app.
+
+Local development and tests:
+
+```sh
+cd backend
+python -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
+.venv/bin/uvicorn app.main:app --reload
+```
+
+## Getting started (iOS)
 
 ```sh
 brew install xcodegen
@@ -40,12 +79,11 @@ open StockWidget.xcodeproj
 ```
 
 1. Set your team, then replace `com.example.stockwidget` / `group.com.example.stockwidget` in `project.yml` **and** `Shared/Services/AppGroup.swift`.
-2. Open `Widget/Views/MediumPortfolioView.swift` or `LargePortfolioView.swift` — the `#Preview` timelines render from mock data immediately (gain day, loss day, stale IBKR, offline).
-3. Run the app and enter your backend URL + token. Until then, the widget shows sample data with a `SAMPLE` tag.
+2. Run the app and enter your backend URL + token. Until then, the widget shows "Open the app to connect your backend."
 
 ## Backend contract
 
-`GET <endpoint>` with `Authorization: Bearer <token>` → `200 application/json`. Full example: [`Backend/portfolio.sample.json`](Backend/portfolio.sample.json).
+`GET /v1/portfolio` with `Authorization: Bearer <token>` → `200 application/json`. Pydantic models: [`backend/app/schemas.py`](backend/app/schemas.py); Swift models: [`Shared/Models/Portfolio.swift`](Shared/Models/Portfolio.swift).
 
 ```jsonc
 {
@@ -70,7 +108,7 @@ open StockWidget.xcodeproj
 }
 ```
 
-The backend sends raw facts only (quantity, price, previous close, cash, FX). The device derives market values, totals, day P&L and percentages, so the numbers always add up. Dates are ISO-8601, fractional seconds optional. Unknown fields are ignored. Bump `schemaVersion` for breaking changes; the widget shows "Update the app" when it sees a version it doesn't know.
+The backend sends raw facts only (quantity, price, previous close, cash, FX). The device derives market values, totals, day P&L and percentages, so the numbers always add up. A position's `currency` can differ from its broker's, for example an EUR-listed ETF in a USD IBKR account. `fx.rates` covers every currency that appears in the payload. Dates are ISO-8601, fractional seconds optional. Unknown fields are ignored. Bump `schemaVersion` for breaking changes; the widget shows "Update the app" when it sees a version it doesn't know.
 
 The backend holds the broker credentials (Groww API, IBKR Client Portal / Flex Web Service). The phone only stores a read-only, revocable token for this one endpoint.
 

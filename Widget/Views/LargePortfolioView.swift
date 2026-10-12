@@ -143,10 +143,3 @@ private struct PositionRow: View {
     }
 }
 
-#Preview("Large", as: .systemLarge) {
-    PortfolioWidget()
-} timeline: {
-    PortfolioEntry.sample(.gainDay)
-    PortfolioEntry.sample(.lossDay, baseCurrency: .usd)
-    PortfolioEntry.sample(.ibkrStale)
-}

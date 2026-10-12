@@ -1,19 +1,15 @@
 import Foundation
 
 protocol PortfolioDataSource: Sendable {
-    /// True for canned data; the widget labels it "SAMPLE" and never caches it.
-    var isSample: Bool { get }
     func fetchPortfolio() async throws -> PortfolioSummary
 }
 
-extension PortfolioDataSource {
-    var isSample: Bool { false }
-}
-
 enum PortfolioError: LocalizedError, Equatable {
+    case notConfigured
     case invalidEndpoint
     case missingCredentials
     case unauthorized
+    case brokersUnavailable
     case http(Int)
     case invalidResponse
     case unsupportedSchema(Int)
@@ -21,9 +17,11 @@ enum PortfolioError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .notConfigured: "Open the app to connect your backend."
         case .invalidEndpoint: "Endpoint must be an https:// URL."
         case .missingCredentials: "Add your API token in the app."
         case .unauthorized: "Token rejected. Update it in the app."
+        case .brokersUnavailable: "Groww and IBKR are both unreachable."
         case .http(let code): "Server error (\(code))."
         case .invalidResponse: "Unexpected response from server."
         case .unsupportedSchema(let version): "Update the app to read schema v\(version)."
@@ -61,6 +59,7 @@ struct RemotePortfolioDataSource: PortfolioDataSource {
         switch http.statusCode {
         case 200: break
         case 401, 403: throw PortfolioError.unauthorized
+        case 503: throw PortfolioError.brokersUnavailable
         default: throw PortfolioError.http(http.statusCode)
         }
 
@@ -84,14 +83,8 @@ extension URLSession {
 }
 
 enum PortfolioDataSourceFactory {
-    static func make() -> PortfolioDataSource {
-        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1" {
-            return MockPortfolioDataSource()
-        }
-        if let endpoint = BackendConfiguration.endpoint {
-            return RemotePortfolioDataSource(endpoint: endpoint)
-        }
-        // Not configured yet: render sample data rather than an empty widget.
-        return MockPortfolioDataSource()
+    static func make() throws -> PortfolioDataSource {
+        guard let endpoint = BackendConfiguration.endpoint else { throw PortfolioError.notConfigured }
+        return RemotePortfolioDataSource(endpoint: endpoint)
     }
 }

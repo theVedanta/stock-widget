@@ -18,7 +18,7 @@ enum AppGroup {
 enum BackendConfiguration {
     private static let endpointKey = "backendEndpoint"
 
-    /// `nil` until configured; the widget shows sample data in that case.
+    /// `nil` until configured in the app; the widget then asks the user to set it up.
     static var endpoint: URL? {
         guard let raw = AppGroup.defaults?.string(forKey: endpointKey),
               let url = URL(string: raw), url.scheme == "https" else { return nil }

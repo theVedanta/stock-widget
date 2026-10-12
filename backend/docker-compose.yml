@@ -1,0 +1,33 @@
+# API + IB Gateway (with IBC for unattended login / daily restart).
+# Put this behind HTTPS (Caddy, Cloudflare Tunnel, Tailscale Funnel, …): iOS only talks to https:// endpoints.
+services:
+  api:
+    build: .
+    env_file: .env
+    environment:
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: "4003"          # gnzsnz/ib-gateway relays live API on 4003 (paper: 4004)
+      DATABASE_PATH: /srv/data/portfolio.db
+    volumes:
+      - data:/srv/data
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - ib-gateway
+    restart: unless-stopped
+
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    environment:
+      TWS_USERID: ${IBKR_USERNAME}
+      TWS_PASSWORD: ${IBKR_PASSWORD}
+      TRADING_MODE: live
+      READ_ONLY_API: "yes"
+      TWOFA_TIMEOUT_ACTION: restart
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"
+      AUTO_RESTART_TIME: "11:59 PM"
+      TIME_ZONE: America/New_York
+    restart: unless-stopped
+
+volumes:
+  data:

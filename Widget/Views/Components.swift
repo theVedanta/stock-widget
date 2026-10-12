@@ -172,7 +172,7 @@ struct Sparkline: View {
     }
 }
 
-/// "Updated 4m ago" plus cached / sample markers.
+/// "Updated 4m ago" plus an offline marker when serving cached data.
 struct FreshnessFooter: View {
     let asOf: Date
     let now: Date
@@ -188,14 +188,6 @@ struct FreshnessFooter: View {
             }
             Text(FreshnessFormat.updated(asOf: asOf, now: now))
                 .lineLimit(1)
-            if freshness == .sample {
-                Text("SAMPLE")
-                    .font(.label(7.5, weight: .bold))
-                    .tracking(0.6)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1.5)
-                    .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 0.5))
-            }
             if let trailing {
                 Spacer(minLength: 4)
                 Text(trailing)
@@ -208,7 +200,38 @@ struct FreshnessFooter: View {
     }
 }
 
-/// Shown when there is no data at all (first launch offline, bad token, …).
+/// Skeleton shown while the first timeline loads (WidgetKit placeholder).
+struct LoadingView: View {
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("NET WORTH")
+            bar(width: 150, height: 26)
+            bar(width: 110, height: 18)
+            Spacer(minLength: 0)
+            if family == .systemLarge {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.card)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.card)
+                }
+                .frame(height: 70)
+                ForEach(0..<5, id: \.self) { _ in bar(width: .infinity, height: 14) }
+                Spacer(minLength: 0)
+            }
+            bar(width: 80, height: 9)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func bar(width: CGFloat, height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: height / 3, style: .continuous)
+            .fill(Theme.card)
+            .frame(maxWidth: width, minHeight: height, maxHeight: height)
+    }
+}
+
+/// Shown when there is no data at all (not configured, first launch offline, bad token, …).
 struct UnavailableView: View {
     let message: String?
 

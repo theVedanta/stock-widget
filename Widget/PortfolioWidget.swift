@@ -39,8 +39,10 @@ struct PortfolioWidgetView: View {
                 default:
                     MediumPortfolioView(portfolio: portfolio, date: entry.date, freshness: entry.freshness)
                 }
+            } else if let message = entry.errorMessage {
+                UnavailableView(message: message)
             } else {
-                UnavailableView(message: entry.errorMessage)
+                LoadingView()
             }
         }
         .environment(\.colorScheme, .dark)

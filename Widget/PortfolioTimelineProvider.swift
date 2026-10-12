@@ -3,22 +3,22 @@ import WidgetKit
 struct PortfolioTimelineProvider: AppIntentTimelineProvider {
     var repository: PortfolioRepository = .shared
 
-    /// Rendered redacted by WidgetKit while the first timeline loads.
+    /// Skeleton shown while the first timeline loads.
     func placeholder(in context: Context) -> PortfolioEntry {
-        .sample()
+        .loading()
     }
 
     /// Widget gallery + transient displays: must be fast, so never block on the network
     /// unless there's nothing cached at all.
     func snapshot(for configuration: PortfolioConfigurationIntent, in context: Context) async -> PortfolioEntry {
         let base = configuration.baseCurrency.code
-        if context.isPreview {
-            return .sample(baseCurrency: base)
-        }
         if let cached = await repository.cached() {
             return PortfolioEntry(date: .now, load: cached, baseCurrency: base)
         }
-        return await entries(for: base, now: .now).entries.first ?? .sample(baseCurrency: base)
+        if context.isPreview {
+            return .loading()
+        }
+        return await entries(for: base, now: .now).entries.first ?? .loading()
     }
 
     func timeline(for configuration: PortfolioConfigurationIntent, in context: Context) async -> Timeline<PortfolioEntry> {

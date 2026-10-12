@@ -67,12 +67,3 @@ struct MediumPortfolioView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
-
-#Preview("Gain · INR", as: .systemMedium) {
-    PortfolioWidget()
-} timeline: {
-    PortfolioEntry.sample(.gainDay)
-    PortfolioEntry.sample(.lossDay)
-    PortfolioEntry.sample(.ibkrStale, baseCurrency: .usd)
-    PortfolioEntry.unavailable("You're offline.")
-}

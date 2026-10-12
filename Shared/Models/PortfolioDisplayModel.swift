@@ -48,8 +48,8 @@ struct PortfolioDisplayModel: Hashable, Sendable {
 
         // Converting yesterday's value at today's rate keeps FX moves out of "today's P&L",
         // which is what you want for a stock P&L figure.
-        let total = summary.brokers.reduce(0) { $0 + toBase($1.totalValue, $1.currency) }
-        let change = summary.brokers.reduce(0) { $0 + toBase($1.dayChange, $1.currency) }
+        let total = summary.brokers.reduce(0) { $0 + toBase($1.totalValue(using: fx), $1.currency) }
+        let change = summary.brokers.reduce(0) { $0 + toBase($1.dayChange(using: fx), $1.currency) }
         let previous = total - change
 
         baseCurrency = base
@@ -57,17 +57,19 @@ struct PortfolioDisplayModel: Hashable, Sendable {
         totalValue = total
         dayChange = change
         dayChangePercent = previous > 0 ? change / previous : 0
-        hasMissingFX = summary.brokers.contains { fx.convert(1, from: $0.currency, to: base) == nil }
+        let currencies = Set(summary.brokers.flatMap { [$0.currency] + $0.positions.map(\.currency) })
+        hasMissingFX = currencies.contains { fx.convert(1, from: $0, to: base) == nil }
 
         brokers = summary.brokers.map { broker in
-            let value = toBase(broker.totalValue, broker.currency)
+            let nativeValue = broker.totalValue(using: fx)
+            let value = toBase(nativeValue, broker.currency)
             return Broker(
                 id: broker.id,
                 shortName: broker.shortName,
                 nativeCurrency: broker.currency,
-                nativeValue: broker.totalValue,
+                nativeValue: nativeValue,
                 baseValue: value,
-                dayChangePercent: broker.dayChangePercent,
+                dayChangePercent: broker.dayChangePercent(using: fx),
                 share: total > 0 ? value / total : 0,
                 syncStatus: broker.syncStatus
             )

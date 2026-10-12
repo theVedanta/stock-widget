@@ -11,11 +11,11 @@ struct PortfolioSummary: Codable, Hashable, Sendable {
 
     let schemaVersion: Int
     /// When the backend last priced the portfolio. Drives "Updated Xm ago".
-    var asOf: Date
+    let asOf: Date
     let fx: FXRates
-    var brokers: [BrokerHoldings]
+    let brokers: [BrokerHoldings]
     /// Daily closing values per broker (native currency), oldest first. Feeds the sparkline.
-    var history: [HistoryPoint]
+    let history: [HistoryPoint]
 }
 
 struct BrokerID: RawRepresentable, Codable, Hashable, Sendable {
@@ -42,17 +42,25 @@ struct BrokerHoldings: Codable, Hashable, Sendable, Identifiable {
     let shortName: String
     let currency: CurrencyCode
     let cash: Double
-    var syncedAt: Date
+    let syncedAt: Date
     let syncStatus: SyncStatus
-    var positions: [Position]
+    let positions: [Position]
 
-    var investedValue: Double { positions.reduce(0) { $0 + $1.marketValue } }
-    var totalValue: Double { investedValue + cash }
-    var dayChange: Double { positions.reduce(0) { $0 + $1.dayChange } }
+    // Positions can be in a different currency from the account (an IBKR USD account
+    // holding a EUR-listed ETF), so totals convert each position into `currency`.
 
-    var dayChangePercent: Double {
-        let previous = totalValue - dayChange
-        return previous > 0 ? dayChange / previous : 0
+    func totalValue(using fx: FXRates) -> Double {
+        positions.reduce(cash) { $0 + (fx.convert($1.marketValue, from: $1.currency, to: currency) ?? 0) }
+    }
+
+    func dayChange(using fx: FXRates) -> Double {
+        positions.reduce(0) { $0 + (fx.convert($1.dayChange, from: $1.currency, to: currency) ?? 0) }
+    }
+
+    func dayChangePercent(using fx: FXRates) -> Double {
+        let change = dayChange(using: fx)
+        let previous = totalValue(using: fx) - change
+        return previous > 0 ? change / previous : 0
     }
 }
 
@@ -62,8 +70,8 @@ struct Position: Codable, Hashable, Sendable, Identifiable {
     let exchange: String
     let currency: CurrencyCode
     let quantity: Double
-    var lastPrice: Double
-    var previousClose: Double
+    let lastPrice: Double
+    let previousClose: Double
 
     var id: String { "\(exchange):\(symbol)" }
     var marketValue: Double { quantity * lastPrice }
@@ -73,7 +81,7 @@ struct Position: Codable, Hashable, Sendable, Identifiable {
 }
 
 struct HistoryPoint: Codable, Hashable, Sendable {
-    var timestamp: Date
+    let timestamp: Date
     /// Broker ID → total value in that broker's native currency.
     let values: [String: Double]
 }

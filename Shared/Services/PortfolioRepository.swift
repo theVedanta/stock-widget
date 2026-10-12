@@ -5,8 +5,6 @@ enum DataFreshness: Hashable, Sendable {
     case live
     /// Network failed; showing the last good payload.
     case cached
-    /// Mock data (previews, or backend not configured yet).
-    case sample
 }
 
 struct PortfolioLoad: Sendable {
@@ -49,12 +47,12 @@ struct PortfolioCache: Sendable {
 actor PortfolioRepository {
     static let shared = PortfolioRepository()
 
-    private let makeSource: @Sendable () -> PortfolioDataSource
+    private let makeSource: @Sendable () throws -> PortfolioDataSource
     private let cache: PortfolioCache
     private var inFlight: Task<PortfolioSummary, Error>?
 
     init(
-        source: @escaping @Sendable () -> PortfolioDataSource = PortfolioDataSourceFactory.make,
+        source: @escaping @Sendable () throws -> PortfolioDataSource = PortfolioDataSourceFactory.make,
         cache: PortfolioCache = PortfolioCache()
     ) {
         self.makeSource = source
@@ -62,10 +60,7 @@ actor PortfolioRepository {
     }
 
     func load(now: Date = .now) async throws -> PortfolioLoad {
-        let source = makeSource()
-        if source.isSample {
-            return PortfolioLoad(summary: try await source.fetchPortfolio(), freshness: .sample)
-        }
+        let source = try makeSource()
 
         if let record = cache.read(), now.timeIntervalSince(record.fetchedAt) < RefreshPolicy.minimumFetchInterval {
             return PortfolioLoad(summary: record.summary, freshness: .live)

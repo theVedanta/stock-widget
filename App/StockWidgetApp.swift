@@ -29,7 +29,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Aggregation backend")
                 } footer: {
-                    Text("Leave the endpoint empty to show sample data. The token is stored in the Keychain and shared only with the widget.")
+                    Text("Your backend's /v1/portfolio URL and its API_TOKEN. The token is stored in the Keychain and shared only with the widget.")
                 }
 
                 Section {
