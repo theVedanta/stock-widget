@@ -9,10 +9,3 @@ App/*.entitlements
 Widget/Info.plist
 Widget/*.entitlements
 
-# Backend
-backend/.venv/
-backend/.env
-backend/data/
-__pycache__/
-.pytest_cache/
-*.egg-info/

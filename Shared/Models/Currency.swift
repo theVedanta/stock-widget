@@ -1,7 +1,7 @@
 import Foundation
 
 /// ISO-4217 currency code. A struct rather than an enum so an unexpected
-/// currency from the backend (e.g. an IBKR EUR sub-account) decodes cleanly.
+/// currency (e.g. an IBKR EUR sub-account) works without code changes.
 struct CurrencyCode: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
     let rawValue: String
 
@@ -29,7 +29,7 @@ struct CurrencyCode: RawRepresentable, Codable, Hashable, Sendable, CustomString
     }
 }
 
-/// Spot FX rates as delivered by the backend: units of each currency per 1 `base`.
+/// Spot FX rates: units of each currency per 1 `base`.
 /// `{"base": "USD", "rates": {"INR": 88.65}}` means 1 USD = 88.65 INR.
 struct FXRates: Codable, Hashable, Sendable {
     let base: CurrencyCode

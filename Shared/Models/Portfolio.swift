@@ -1,16 +1,12 @@
 import Foundation
 
-// MARK: - Wire models (GET /v1/portfolio)
+// MARK: - Portfolio models
 //
-// The backend sends raw facts (quantities, prices, cash, FX). Totals, P&L and
-// percentages are derived on device so they can never disagree with each other.
+// Built on device by `PortfolioAggregator` from raw facts (quantities, prices, cash, FX).
+// Totals, P&L and percentages are always derived, so they can never disagree.
 
-/// Root payload returned by the aggregation backend.
 struct PortfolioSummary: Codable, Hashable, Sendable {
-    static let supportedSchemaVersion = 1
-
-    let schemaVersion: Int
-    /// When the backend last priced the portfolio. Drives "Updated Xm ago".
+    /// When the portfolio was last priced. Drives "Updated Xm ago".
     let asOf: Date
     let fx: FXRates
     let brokers: [BrokerHoldings]
@@ -45,6 +41,8 @@ struct BrokerHoldings: Codable, Hashable, Sendable, Identifiable {
     let syncedAt: Date
     let syncStatus: SyncStatus
     let positions: [Position]
+    /// Why the last sync failed, when `syncStatus` isn't `.ok`.
+    var syncMessage: String? = nil
 
     // Positions can be in a different currency from the account (an IBKR USD account
     // holding a EUR-listed ETF), so totals convert each position into `currency`.
@@ -61,6 +59,13 @@ struct BrokerHoldings: Codable, Hashable, Sendable, Identifiable {
         let change = dayChange(using: fx)
         let previous = totalValue(using: fx) - change
         return previous > 0 ? change / previous : 0
+    }
+
+    func marked(_ status: SyncStatus, message: String?) -> BrokerHoldings {
+        BrokerHoldings(
+            id: id, displayName: displayName, shortName: shortName, currency: currency,
+            cash: cash, syncedAt: syncedAt, syncStatus: status, positions: positions, syncMessage: message
+        )
     }
 }
 

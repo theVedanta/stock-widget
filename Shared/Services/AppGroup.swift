@@ -11,41 +11,33 @@ enum AppGroup {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
     }
 
-    static var defaults: UserDefaults? { UserDefaults(suiteName: identifier) }
-}
-
-/// Non-secret backend settings, written by the host app.
-enum BackendConfiguration {
-    private static let endpointKey = "backendEndpoint"
-
-    /// `nil` until configured in the app; the widget then asks the user to set it up.
-    static var endpoint: URL? {
-        guard let raw = AppGroup.defaults?.string(forKey: endpointKey),
-              let url = URL(string: raw), url.scheme == "https" else { return nil }
-        return url
-    }
-
-    static func setEndpoint(_ raw: String) throws {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            AppGroup.defaults?.removeObject(forKey: endpointKey)
-            return
-        }
-        guard let url = URL(string: trimmed), url.scheme == "https", url.host != nil else {
-            throw PortfolioError.invalidEndpoint
-        }
-        AppGroup.defaults?.set(url.absoluteString, forKey: endpointKey)
+    static func fileURL(_ name: String) -> URL? {
+        containerURL?.appendingPathComponent(name)
     }
 }
 
-/// Bearer token for the aggregation backend, stored in a Keychain access group
-/// shared with the widget. `AfterFirstUnlockThisDeviceOnly` lets the widget refresh
-/// while the phone is locked without the token ever leaving the device in backups.
-struct CredentialStore: Sendable {
-    static let shared = CredentialStore()
+enum CredentialKey: String, CaseIterable, Sendable {
+    /// Groww "TOTP token" (used as the bearer key for the token exchange).
+    case growwAPIKey
+    /// Base32 secret shown next to the TOTP token; codes are generated on device.
+    case growwTOTPSecret
+    /// Alternative to TOTP: API secret for the approval flow (key must be approved daily on groww.in).
+    case growwAPISecret
+    /// Cached daily access token ("token\nexpiryEpoch"). Written by the app/widget, not the user.
+    case growwAccessToken
+    /// IBKR Flex Web Service token (Client Portal → Settings → Flex Web Service).
+    case ibkrFlexToken
+    /// ID of an Activity Flex Query with Open Positions + Cash Report.
+    case ibkrFlexQueryID
+}
 
-    private let service = "com.example.stockwidget.backend"
-    private let account = "api-token"
+/// Broker credentials in a Keychain access group shared by the app and the widget.
+/// `AfterFirstUnlockThisDeviceOnly` lets the widget refresh while the phone is locked,
+/// and keeps the keys out of backups and off other devices.
+struct Keychain: Sendable {
+    static let shared = Keychain()
+
+    private let service = "com.example.stockwidget.credentials"
 
     /// `$(AppIdentifierPrefix)` is injected into Info.plist at build time (see project.yml).
     private var accessGroup: String? {
@@ -54,36 +46,35 @@ struct CredentialStore: Sendable {
         return prefix + AppGroup.keychainGroupSuffix
     }
 
-    private var baseQuery: [String: Any] {
+    private func query(_ key: CredentialKey) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: key.rawValue,
         ]
         if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
         return query
     }
 
-    func readToken() -> String? {
-        var query = baseQuery
+    func string(_ key: CredentialKey) -> String? {
+        var query = query(key)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8), !value.isEmpty else { return nil }
+        return value
     }
 
-    func saveToken(_ token: String) throws {
-        SecItemDelete(baseQuery as CFDictionary)
-        var query = baseQuery
-        query[kSecValueData as String] = Data(token.utf8)
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(query as CFDictionary, nil)
+    /// Stores `value`, or deletes the item when `value` is nil or blank.
+    func set(_ value: String?, for key: CredentialKey) throws {
+        SecItemDelete(query(key) as CFDictionary)
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return }
+        var item = query(key)
+        item[kSecValueData as String] = Data(value.utf8)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw PortfolioError.keychain(status) }
-    }
-
-    func deleteToken() {
-        SecItemDelete(baseQuery as CFDictionary)
     }
 }

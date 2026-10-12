@@ -42,36 +42,36 @@ struct PortfolioCache: Sendable {
     }
 }
 
-/// Single entry point for portfolio data. Throttles network calls, de-duplicates
-/// concurrent requests (medium + large widgets reload together) and falls back to cache.
+/// Single entry point for portfolio data, shared by the app and the widget. Throttles
+/// broker calls, de-duplicates concurrent requests (medium + large widgets reload together)
+/// and falls back to the last good result when offline.
 actor PortfolioRepository {
     static let shared = PortfolioRepository()
 
-    private let makeSource: @Sendable () throws -> PortfolioDataSource
+    private let aggregator: PortfolioAggregator
     private let cache: PortfolioCache
     private var inFlight: Task<PortfolioSummary, Error>?
 
-    init(
-        source: @escaping @Sendable () throws -> PortfolioDataSource = PortfolioDataSourceFactory.make,
-        cache: PortfolioCache = PortfolioCache()
-    ) {
-        self.makeSource = source
+    init(aggregator: PortfolioAggregator = PortfolioAggregator(), cache: PortfolioCache = PortfolioCache()) {
+        self.aggregator = aggregator
         self.cache = cache
     }
 
-    func load(now: Date = .now) async throws -> PortfolioLoad {
-        let source = try makeSource()
-
-        if let record = cache.read(), now.timeIntervalSince(record.fetchedAt) < RefreshPolicy.minimumFetchInterval {
+    /// - Parameter force: skip the throttle and regenerate the IBKR Flex statement (used by the app).
+    func load(now: Date = .now, force: Bool = false) async throws -> PortfolioLoad {
+        let record = cache.read()
+        if !force, let record, now.timeIntervalSince(record.fetchedAt) < RefreshPolicy.minimumFetchInterval {
             return PortfolioLoad(summary: record.summary, freshness: .live)
         }
 
         do {
-            let summary = try await fetchDeduplicated(from: source)
+            let summary = try await fetchDeduplicated(previous: record?.summary, force: force)
             cache.write(.init(summary: summary, fetchedAt: now))
             return PortfolioLoad(summary: summary, freshness: .live)
+        } catch PortfolioError.notConfigured {
+            throw PortfolioError.notConfigured
         } catch {
-            guard let record = cache.read() else { throw error }
+            guard let record else { throw error }
             return PortfolioLoad(summary: record.summary, freshness: .cached)
         }
     }
@@ -81,9 +81,10 @@ actor PortfolioRepository {
         cache.read().map { PortfolioLoad(summary: $0.summary, freshness: .live) }
     }
 
-    private func fetchDeduplicated(from source: PortfolioDataSource) async throws -> PortfolioSummary {
+    private func fetchDeduplicated(previous: PortfolioSummary?, force: Bool) async throws -> PortfolioSummary {
         if let inFlight { return try await inFlight.value }
-        let task = Task { try await source.fetchPortfolio() }
+        let aggregator = aggregator
+        let task = Task { try await aggregator.fetchPortfolio(previous: previous, forceStatement: force) }
         inFlight = task
         defer { inFlight = nil }
         return try await task.value

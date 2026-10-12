@@ -8,69 +8,28 @@ A dark, minimal iOS home-screen widget (WidgetKit + SwiftUI, iOS 17+) that combi
 
 ## Project layout
 
+No server: the app and widget call the brokers directly, with keys in the Keychain.
+
 ```
 project.yml                     XcodeGen spec (app + widget extension, App Group, Keychain group)
-backend/                        FastAPI aggregation server (Groww + IBKR → one JSON payload)
 Shared/                         Compiled into both targets
   Models/Currency.swift         CurrencyCode, FXRates (conversion)
-  Models/Portfolio.swift        PortfolioSummary, BrokerHoldings, Position, HistoryPoint (wire models)
+  Models/Portfolio.swift        PortfolioSummary, BrokerHoldings, Position, HistoryPoint
   Models/PortfolioDisplayModel  Everything pre-computed in the chosen base currency
-  Services/PortfolioDataSource  Remote REST client, errors, data-source factory
+  Services/GrowwClient.swift    Groww Trade API: login (TOTP), holdings, quotes, cash
+  Services/IBKRClient.swift     IBKR Flex Web Service: positions + cash (XML)
+  Services/MarketData.swift     Yahoo Finance chart API: live prices for IBKR holdings, FX
+  Services/TOTP.swift           RFC 6238 codes for Groww's daily login
+  Services/PortfolioAggregator  Fetches both brokers, FX, records daily history
   Services/PortfolioRepository  Cache (App Group), throttling, request de-duplication
-  Services/AppGroup.swift       App Group, endpoint setting, Keychain token store
+  Services/AppGroup.swift       App Group + Keychain credential store
   Support/MarketHours.swift     NSE / NYSE sessions + refresh policy
   Support/Formatters.swift      ₹ lakh/crore + $ K/M formatting, "Updated Xm ago"
-Widget/                         Widget extension
-  PortfolioWidget.swift         @main bundle, AppIntentConfiguration, family switch
-  PortfolioTimelineProvider     AppIntentTimelineProvider
-  PortfolioEntry.swift          TimelineEntry
-  PortfolioConfigurationIntent  "Show total in ₹ / $" widget setting
-  Theme.swift                   Colours + type
-  Views/                        Medium, Large, shared components (badge, pills, sparkline)
-App/StockWidgetApp.swift        Host app: set endpoint + token, reload widgets
+Widget/                         Widget extension (provider, entry, intent, views)
+App/StockWidgetApp.swift        Host app: enter keys, refresh now
 ```
 
-## Backend
-
-`backend/` is a small FastAPI service that logs into both brokers, prices every holding, and serves the payload the widget reads.
-
-| Broker | How it connects | What it reads |
-| --- | --- | --- |
-| Groww | [Trade API](https://groww.in/trade-api/docs) over REST (needs the Trade API subscription) | `/holdings/user`, `/live-data/quote` per holding (last price + day change), `/margins/detail/user` (cash) |
-| IBKR | IB Gateway socket API via [`ib_async`](https://github.com/ib-api-reloaded/ib_async), read-only | portfolio positions + IB's mark price, snapshot prior close, `TotalCashValue` |
-
-FX rates come from [Frankfurter](https://frankfurter.dev) (ECB reference rates, no key). Every refresh records each broker's total in SQLite, and the last value of each day feeds the 30-day sparkline. The history starts the day you first run the backend.
-
-**Behaviour**
-- A background task refreshes every 5 minutes, so widget requests return from cache straight away and history keeps filling even when no phone is asking.
-- If one broker fails, its last good holdings are served marked `stale`. If it has never succeeded, it's marked `error`, which shows the ⚠︎ on its pill. If every broker fails, the API returns `503`.
-- Groww tokens expire at 06:00 IST every day. With `GROWW_API_KEY` + `GROWW_TOTP_SECRET` the backend renews them itself. A `401` triggers one re-login.
-- For IBKR, `docker-compose.yml` runs [`gnzsnz/ib-gateway`](https://github.com/gnzsnz/ib-gateway-docker) with IBC, so the gateway logs in and restarts every night unattended. IBKR still asks for a 2FA approval on your phone about once a week.
-
-**Limitations**
-- Groww's Trade API only exposes demat stocks and ETFs. Mutual funds don't show up.
-- Without an IBKR market-data subscription, prior closes use delayed data. That's fine for day change.
-
-**Run it**
-
-```sh
-cd backend
-cp .env.example .env          # fill in API_TOKEN, Groww key + TOTP secret, IBKR login
-docker compose up -d          # API on 127.0.0.1:8000 + IB Gateway
-```
-
-Expose it over HTTPS (Caddy, Cloudflare Tunnel, Tailscale Funnel, …), then enter `https://<host>/v1/portfolio` and your `API_TOKEN` in the iOS app.
-
-Local development and tests:
-
-```sh
-cd backend
-python -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest
-.venv/bin/uvicorn app.main:app --reload
-```
-
-## Getting started (iOS)
+## Setup
 
 ```sh
 brew install xcodegen
@@ -79,38 +38,31 @@ open StockWidget.xcodeproj
 ```
 
 1. Set your team, then replace `com.example.stockwidget` / `group.com.example.stockwidget` in `project.yml` **and** `Shared/Services/AppGroup.swift`.
-2. Run the app and enter your backend URL + token. Until then, the widget shows "Open the app to connect your backend."
+2. **Groww** (needs the Trade API subscription): on groww.in go to Trade API → Generate API key → *Generate TOTP token*. Copy the **TOTP token** and the **TOTP secret**.
+3. **IBKR**: in Client Portal → Performance & Reports → Flex Queries, create an *Activity Flex Query*:
+   - **Open Positions**, with *Options: Summary*. Fields: Symbol, Description, Currency, Listing Exchange, Asset Class, Quantity, Mark Price, Multiplier.
+   - **Cash Report**. Fields: Currency, Ending Cash.
+   - **Account Information**. Field: Currency.
+   - Format XML, period *Last Business Day*.
 
-## Backend contract
+   Note the **Query ID**. Then enable *Flex Web Service* under Settings to get a **token**. Tokens last up to a year.
+4. Run the app, paste the four values and tap **Save**. It refreshes straight away and shows each broker's total, or the error if a key is wrong. Then add the widget.
 
-`GET /v1/portfolio` with `Authorization: Bearer <token>` → `200 application/json`. Pydantic models: [`backend/app/schemas.py`](backend/app/schemas.py); Swift models: [`Shared/Models/Portfolio.swift`](Shared/Models/Portfolio.swift).
+## Where the data comes from
 
-```jsonc
-{
-  "schemaVersion": 1,
-  "asOf": "2026-10-12T09:45:00Z",              // when prices were taken → "Updated Xm ago"
-  "fx": { "base": "USD", "rates": { "INR": 88.65 }, "asOf": "…" },   // 1 USD = 88.65 INR
-  "brokers": [
-    {
-      "id": "groww", "displayName": "Groww", "shortName": "GROWW",
-      "currency": "INR", "cash": 48250.0,
-      "syncedAt": "…", "syncStatus": "ok",      // ok | stale | error
-      "positions": [
-        { "symbol": "RELIANCE", "name": "Reliance Industries", "exchange": "NSE",
-          "currency": "INR", "quantity": 120, "lastPrice": 2945.30, "previousClose": 2901.10 }
-      ]
-    },
-    { "id": "ibkr", "currency": "USD", … }
-  ],
-  "history": [                                  // daily closes, native currency per broker
-    { "timestamp": "2026-09-13T10:00:00Z", "values": { "groww": 1712345.12, "ibkr": 70123.45 } }
-  ]
-}
-```
+| | Source | Notes |
+| --- | --- | --- |
+| Groww holdings, prices, cash | [Groww Trade API](https://groww.in/trade-api/docs): `/holdings/user`, `/live-data/quote`, `/margins/detail/user` | Access token expires 06:00 IST daily. The app logs in again by itself using a TOTP code generated on the phone. |
+| IBKR holdings, cash | [Flex Web Service](https://www.interactivebrokers.com/campus/ibkr-api-page/flex-web-service) (`SendRequest` → `GetStatement`) | End-of-day snapshot, re-fetched at most every 6 hours. *Refresh now* in the app forces a new one. |
+| IBKR live prices + previous close | Yahoo Finance chart endpoint | Unofficial, no key. Non-US listings are mapped by exchange (`.L`, `.DE`, …). If no sensible quote comes back, IBKR's mark price is used. |
+| FX | Yahoo Finance (`USDINR=X`, …) | If the lookup fails, the last good rate is reused. |
+| 30-day sparkline | Recorded on device | Each refresh saves per-broker totals in the App Group. The line starts the day you install. |
 
-The backend sends raw facts only (quantity, price, previous close, cash, FX). The device derives market values, totals, day P&L and percentages, so the numbers always add up. A position's `currency` can differ from its broker's, for example an EUR-listed ETF in a USD IBKR account. `fx.rates` covers every currency that appears in the payload. Dates are ISO-8601, fractional seconds optional. Unknown fields are ignored. Bump `schemaVersion` for breaking changes; the widget shows "Update the app" when it sees a version it doesn't know.
+**Failures.** If one broker fails, its last good holdings stay on screen marked stale. If it has never loaded, it shows as an error. Either way its pill gets a ⚠︎, and the app shows the reason.
 
-The backend holds the broker credentials (Groww API, IBKR Client Portal / Flex Web Service). The phone only stores a read-only, revocable token for this one endpoint.
+**Limitations**
+- Groww's API doesn't expose mutual funds.
+- IBKR quantities only update when a new Flex statement is generated. Trades you make today appear after the next statement, or straight away if you tap *Refresh now*.
 
 ## How it behaves
 
@@ -122,6 +74,7 @@ The backend holds the broker credentials (Groww API, IBKR Client Portal / Flex W
 - Each reload fetches once, then adds minute-by-minute timeline entries so "Updated Xm ago" keeps ticking without using extra reloads.
 - If the cache is under 5 minutes old, no network call is made. Concurrent medium + large reloads share a single request.
 - If the network fails, the last good payload is shown from the App Group cache with a ⚠︎ offline icon.
+- Opening the app and tapping *Refresh now* does the slow part, a fresh IBKR Flex statement, and reloads the widgets.
 - Exchange holidays aren't modelled. On a holiday the widget just refreshes on the normal cadence and sees no change.
 
 **Privacy.** These are marked `.privacySensitive()` and get redacted wherever iOS hides sensitive widget data on a locked device (Lock Screen, StandBy, and the Home Screen when *Allow Access When Locked → Widgets* is off):
@@ -129,7 +82,7 @@ The backend holds the broker credentials (Groww API, IBKR Client Portal / Flex W
 
 These stay visible because they're public: tickers, market prices and % moves.
 
-The token is stored in the Keychain as `AfterFirstUnlockThisDeviceOnly`. The cache uses `completeUntilFirstUserAuthentication`. The URLSession is ephemeral, with no URL cache.
+Broker keys live in a Keychain access group shared by the app and the widget, as `AfterFirstUnlockThisDeviceOnly`: readable while the phone is locked after its first unlock, never backed up or synced. The settings screen never shows saved keys again. Cached data uses `completeUntilFirstUserAuthentication`. The URLSession is ephemeral, with no URL cache.
 
 ## Design tokens
 
